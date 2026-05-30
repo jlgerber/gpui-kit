@@ -155,6 +155,13 @@ where
         self
     }
 
+    /// Set the header row height from a [`Size`], keeping body rows on the
+    /// table's own size. Same as `header_row_height(size.table_row_height())`.
+    pub fn header_size(self, size: impl Into<Size>) -> Self {
+        let size: Size = size.into();
+        self.header_row_height(size.table_row_height())
+    }
+
     /// Set whether to draw the border on the right edge of the fixed columns,
     /// default to true.
     ///
