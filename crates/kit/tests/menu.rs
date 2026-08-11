@@ -153,9 +153,9 @@ impl Render for ScrollableCommands {
     }
 }
 
-/// The submenu is painted as a deferred draw outside the items container, so
-/// the container's `overflow_y_scroll` clip must not hide it and its items
-/// must still be hit-testable.
+/// The submenu panel is the last child of the menu's own container, outside
+/// the items container, so the items container's `overflow_y_scroll` clip must
+/// not hide it and its items must still be hit-testable.
 #[gpui_kit::test]
 async fn submenu_opens_unclipped_from_a_scrollable_menu(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
