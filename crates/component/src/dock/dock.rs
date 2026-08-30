@@ -145,6 +145,7 @@ impl DockSkin {
                 cx.stop_propagation();
                 shared.resizing_dock().set(Some(placement));
                 shared.resize_started_open().set(open);
+                gpui_base::set_resizing(cx, true);
                 cx.new(|_| info.clone())
             },
         )
@@ -239,6 +240,7 @@ impl Element for DockResizeTracker {
                 }
                 shared.resizing_dock().set(None);
                 dock.end_resize(window, cx);
+                gpui_base::set_resizing(cx, false);
                 let was_open = shared.resize_started_open().get();
                 // The size lives on the dock, not in the layout tree, so
                 // nothing else tells a subscriber to persist it.
