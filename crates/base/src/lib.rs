@@ -155,7 +155,7 @@ pub use resizable::{
     v_resizable,
 };
 #[doc(hidden)]
-pub use resizable::{PANEL_MIN_SIZE, resize_handle};
+pub use resizable::{PANEL_MIN_SIZE, ResizingDivider, is_resizing, resize_handle, set_resizing};
 pub use root::{Root, RootPlugin};
 pub use scroll_bounce::{ScrollBounce, ScrollBounceMotion};
 pub use scrollable_mask::ScrollableMask;
