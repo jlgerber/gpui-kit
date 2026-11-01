@@ -356,7 +356,8 @@ fn title_bar_and_window_controls_are_observable(cx: &mut TestAppContext) {
         assert!(window.find("title-bar").visible());
         // Windows draws the caption buttons in the title bar. macOS and the web
         // leave them to the system, and so does Linux under the server-side
-        // decorations of the test window.
+        // decorations of the test window, unless `XDG_CURRENT_DESKTOP` names a
+        // tiling desktop that draws no buttons of its own (Hyprland, sway, ...).
         #[cfg(target_os = "windows")]
         {
             let controls = window.find("window-controls");
@@ -369,7 +370,9 @@ fn title_bar_and_window_controls_are_observable(cx: &mut TestAppContext) {
         #[cfg(not(target_os = "windows"))]
         {
             assert!(window.try_find("window-controls").is_some());
-            assert!(window.try_find("close").is_none());
+            if std::env::var_os("XDG_CURRENT_DESKTOP").is_none() {
+                assert!(window.try_find("close").is_none());
+            }
         }
     })
     .unwrap();
