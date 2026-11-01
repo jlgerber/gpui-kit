@@ -44,6 +44,7 @@ pub struct TitleBar {
     style: StyleRefinement,
     children: SmallVec<[AnyElement; 1]>,
     on_close_window: Option<Rc<Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>>>,
+    on_maximize_window: Option<Rc<Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>>>,
 }
 
 impl TitleBar {
@@ -53,6 +54,7 @@ impl TitleBar {
             style: StyleRefinement::default(),
             children: SmallVec::new(),
             on_close_window: None,
+            on_maximize_window: None,
         }
     }
 
@@ -102,6 +104,21 @@ impl TitleBar {
         }
         self
     }
+
+    /// Add custom for maximize / restore window event, default is None, then
+    /// the maximize button and a title bar double click call
+    /// `window.zoom_window()`. For a compositor that ignores the client's
+    /// maximize request and must be asked some other way.
+    /// Linux only, this will do nothing on other platforms.
+    pub fn on_maximize_window(
+        mut self,
+        f: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        if cfg!(target_os = "linux") {
+            self.on_maximize_window = Some(Rc::new(Box::new(f)));
+        }
+        self
+    }
 }
 
 // The Windows control buttons have a fixed width of 35px.
@@ -111,8 +128,12 @@ impl TitleBar {
 #[derive(IntoElement, Clone)]
 enum ControlIcon {
     Minimize,
-    Restore,
-    Maximize,
+    Restore {
+        on_maximize_window: Option<Rc<Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>>>,
+    },
+    Maximize {
+        on_maximize_window: Option<Rc<Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>>>,
+    },
     Close {
         on_close_window: Option<Rc<Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>>>,
     },
@@ -123,12 +144,16 @@ impl ControlIcon {
         Self::Minimize
     }
 
-    fn restore() -> Self {
-        Self::Restore
+    fn restore(
+        on_maximize_window: Option<Rc<Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>>>,
+    ) -> Self {
+        Self::Restore { on_maximize_window }
     }
 
-    fn maximize() -> Self {
-        Self::Maximize
+    fn maximize(
+        on_maximize_window: Option<Rc<Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>>>,
+    ) -> Self {
+        Self::Maximize { on_maximize_window }
     }
 
     fn close(on_close_window: Option<Rc<Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>>>) -> Self {
@@ -138,8 +163,8 @@ impl ControlIcon {
     fn id(&self) -> &'static str {
         match self {
             Self::Minimize => "minimize",
-            Self::Restore => "restore",
-            Self::Maximize => "maximize",
+            Self::Restore { .. } => "restore",
+            Self::Maximize { .. } => "maximize",
             Self::Close { .. } => "close",
         }
     }
@@ -147,8 +172,8 @@ impl ControlIcon {
     fn icon(&self) -> IconName {
         match self {
             Self::Minimize => IconName::WindowMinimize,
-            Self::Restore => IconName::WindowRestore,
-            Self::Maximize => IconName::WindowMaximize,
+            Self::Restore { .. } => IconName::WindowRestore,
+            Self::Maximize { .. } => IconName::WindowMaximize,
             Self::Close { .. } => IconName::WindowClose,
         }
     }
@@ -156,7 +181,7 @@ impl ControlIcon {
     fn window_control_area(&self) -> WindowControlArea {
         match self {
             Self::Minimize => WindowControlArea::Min,
-            Self::Restore | Self::Maximize => WindowControlArea::Max,
+            Self::Restore { .. } | Self::Maximize { .. } => WindowControlArea::Max,
             Self::Close { .. } => WindowControlArea::Close,
         }
     }
@@ -229,9 +254,16 @@ impl RenderOnce for ControlIcon {
                 })
                 .on_click(move |_, window, cx| {
                     cx.stop_propagation();
-                    match icon {
+                    match &icon {
                         Self::Minimize => window.minimize_window(),
-                        Self::Restore | Self::Maximize => window.zoom_window(),
+                        Self::Restore { on_maximize_window }
+                        | Self::Maximize { on_maximize_window } => {
+                            if let Some(f) = on_maximize_window {
+                                f(&ClickEvent::default(), window, cx);
+                            } else {
+                                window.zoom_window();
+                            }
+                        }
                         Self::Close { .. } => {
                             if let Some(f) = on_close_window.clone() {
                                 f(&ClickEvent::default(), window, cx);
@@ -246,9 +278,52 @@ impl RenderOnce for ControlIcon {
     }
 }
 
+/// `XDG_CURRENT_DESKTOP` names of compositors / window managers that grant
+/// server-side decorations but draw no window buttons themselves: at most a
+/// border (Hyprland, niri, river, dwl) or a title-only bar (sway, i3, qtile).
+/// On these a window that skipped its own controls would have no close button
+/// at all, so [`WindowControls`] draws them even under server decorations.
+///
+/// Deliberately absent: environments whose server-side title bars carry
+/// buttons (KDE/KWin, labwc, Wayfire's decoration plugin, COSMIC, Xfce,
+/// Openbox and the other stacking X11 WMs). Drawing ours there stacks a
+/// second set of controls on theirs. GNOME's Mutter never grants server
+/// decorations to Wayland clients, so it takes the client-decorated path.
+#[cfg(any(target_os = "linux", test))]
+const DESKTOPS_WITHOUT_SERVER_CONTROLS: &[&str] =
+    &["Hyprland", "sway", "i3", "niri", "river", "dwl", "qtile"];
+
+/// Whether a window should draw its own min/max/close controls.
+///
+/// `desktop` is the raw `XDG_CURRENT_DESKTOP` value: a colon-separated list,
+/// matched case-insensitively. A client-decorated window always draws them;
+/// a server-decorated one only when the desktop is known to draw none.
+#[cfg(any(target_os = "linux", test))]
+fn draws_own_controls(decorations_client: bool, desktop: Option<&str>) -> bool {
+    decorations_client
+        || desktop.is_some_and(|desktop| {
+            desktop.split(':').map(str::trim).any(|name| {
+                DESKTOPS_WITHOUT_SERVER_CONTROLS
+                    .iter()
+                    .any(|known| known.eq_ignore_ascii_case(name))
+            })
+        })
+}
+
+/// `XDG_CURRENT_DESKTOP`, read once: the session's desktop does not change
+/// under a running process, and this is consulted on every title bar render.
+#[cfg(target_os = "linux")]
+fn current_desktop() -> Option<&'static str> {
+    static DESKTOP: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    DESKTOP
+        .get_or_init(|| std::env::var("XDG_CURRENT_DESKTOP").ok())
+        .as_deref()
+}
+
 #[derive(IntoElement)]
 struct WindowControls {
     on_close_window: Option<Rc<Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>>>,
+    on_maximize_window: Option<Rc<Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>>>,
 }
 
 impl RenderOnce for WindowControls {
@@ -257,17 +332,20 @@ impl RenderOnce for WindowControls {
             return div().id("window-controls").test_support();
         }
 
-        // Under server-side decorations the window manager already renders
+        // Under server-side decorations the window manager usually renders
         // its own title bar, complete with min/max/close; drawing ours as
         // well stacks a duplicate set of controls on top of it (most
         // visibly two close buttons). gpui falls back to server-side
         // decorations on X11 sessions without a compositor, and a Wayland
         // compositor may grant server mode even when client mode was
-        // requested. Skip ours unless this window is actually client-side
-        // decorated, mirroring the `is_client_decorated` gating of the
-        // title bar's window-menu overlay.
+        // requested. Tiling compositors such as Hyprland grant server mode
+        // and then draw no buttons at all, so on the desktops listed in
+        // `DESKTOPS_WITHOUT_SERVER_CONTROLS` ours are drawn regardless.
         #[cfg(target_os = "linux")]
-        if !matches!(window.window_decorations(), Decorations::Client { .. }) {
+        if !draws_own_controls(
+            matches!(window.window_decorations(), Decorations::Client { .. }),
+            current_desktop(),
+        ) {
             return div().id("window-controls").test_support();
         }
 
@@ -286,10 +364,11 @@ impl RenderOnce for WindowControls {
                 this.child(ControlIcon::minimize())
             })
             .when(supported.maximize, |this| {
+                let on_maximize_window = self.on_maximize_window.clone();
                 this.child(if window.is_maximized() {
-                    ControlIcon::restore()
+                    ControlIcon::restore(on_maximize_window)
                 } else {
-                    ControlIcon::maximize()
+                    ControlIcon::maximize(on_maximize_window)
                 })
             })
             .child(ControlIcon::close(self.on_close_window))
@@ -345,7 +424,14 @@ impl RenderOnce for TitleBar {
                 ))
                 .refine_style(&self.style)
                 .when(is_linux, |this| {
-                    this.on_double_click(|_, window, _| window.zoom_window())
+                    let on_maximize_window = self.on_maximize_window.clone();
+                    this.on_double_click(move |event, window, cx| {
+                        if let Some(f) = on_maximize_window.as_ref() {
+                            f(event, window, cx);
+                        } else {
+                            window.zoom_window();
+                        }
+                    })
                 })
                 .when(is_macos, |this| {
                     this.on_double_click(|_, window, _| window.titlebar_double_click())
@@ -383,6 +469,11 @@ impl RenderOnce for TitleBar {
                         .when(!is_web, |this| {
                             this.window_control_area(WindowControlArea::Drag)
                                 .when(window.is_fullscreen(), |this| this.pl_3())
+                                // Unlike `WindowControls`, this stays client-only:
+                                // the desktops that draw no server controls also
+                                // offer no window menu (they do not advertise the
+                                // `window_menu` capability), so the overlay would
+                                // only swallow right clicks.
                                 .when(is_linux && is_client_decorated, |this| {
                                     this.child(
                                         div()
@@ -404,6 +495,7 @@ impl RenderOnce for TitleBar {
                 )
                 .child(WindowControls {
                     on_close_window: self.on_close_window,
+                    on_maximize_window: self.on_maximize_window,
                 }),
         )
     }
@@ -413,6 +505,45 @@ impl RenderOnce for TitleBar {
 mod tests {
     use super::*;
     use gpui::{Rgba, linear_color_stop, linear_gradient};
+
+    #[test]
+    fn test_client_decorated_window_draws_own_controls_on_any_desktop() {
+        assert!(draws_own_controls(true, None));
+        assert!(draws_own_controls(true, Some("KDE")));
+        assert!(draws_own_controls(true, Some("Hyprland")));
+    }
+
+    #[test]
+    fn test_server_decorated_window_draws_own_controls_on_buttonless_tiling_desktops() {
+        for desktop in ["Hyprland", "sway", "i3", "niri", "river", "dwl", "qtile"] {
+            assert!(draws_own_controls(false, Some(desktop)), "{desktop}");
+        }
+    }
+
+    #[test]
+    fn test_server_decorated_window_skips_own_controls_where_the_server_draws_them() {
+        for desktop in [
+            "KDE",
+            "labwc:wlroots",
+            "Wayfire",
+            "COSMIC",
+            "XFCE",
+            "GNOME",
+            "",
+        ] {
+            assert!(!draws_own_controls(false, Some(desktop)), "{desktop}");
+        }
+        assert!(!draws_own_controls(false, None));
+    }
+
+    #[test]
+    fn test_desktop_match_is_case_insensitive_over_colon_separated_entries() {
+        assert!(draws_own_controls(false, Some("hyprland")));
+        assert!(draws_own_controls(false, Some("SWAY")));
+        assert!(draws_own_controls(false, Some("wlroots:sway")));
+        assert!(draws_own_controls(false, Some("niri: wlroots")));
+        assert!(!draws_own_controls(false, Some("Hyprlandish")));
+    }
 
     #[test]
     fn test_default_title_bar_background() {
