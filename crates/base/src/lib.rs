@@ -163,6 +163,8 @@ pub use resizable::{
     ResizeHandle, ResizeHandleContext, ResizeHandleRenderer, ResizeHandleState, h_resizable,
     resizable_panel, resize_handle, v_resizable,
 };
+#[doc(hidden)]
+pub use resizable::{ResizingDivider, is_resizing, set_resizing};
 pub use root::{Root, RootPlugin};
 pub use scroll_bounce::{ScrollBounce, ScrollBounceMotion};
 pub use scrollable_mask::{

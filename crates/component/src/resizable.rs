@@ -19,6 +19,10 @@ pub use gpui_base::{
     HandleEdge, ResizablePanel, ResizablePanelEvent, ResizablePanelGroup, ResizableState,
     ResizeHandle, resizable_panel,
 };
+// The divider-drag flag: `is_resizing` is the process-wide question a
+// widget *inside* a panel can ask, since it has no handle to the group's
+// `ResizableState` (which answers the same thing per-group).
+pub use gpui_base::{ResizingDivider, is_resizing, set_resizing};
 
 use crate::theme::ActiveTheme as _;
 

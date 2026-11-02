@@ -1448,6 +1448,7 @@ impl Element for Inline {
                     {
                         TextSelection::end(window, cx);
                         cx.stop_propagation();
+                        #[allow(clippy::needless_update)]
                         let click = ClickEvent::Mouse(MouseClickEvent {
                             down: MouseDownEvent {
                                 button: event.button,
@@ -1455,6 +1456,9 @@ impl Element for Inline {
                                 modifiers: event.modifiers,
                                 click_count: event.click_count,
                                 first_mouse: false,
+                                // Default rather than spelled out: a gpui with pen pressure adds
+                                // `pressure`/`tilt` fields, and this literal must build with either.
+                                ..Default::default()
                             },
                             up: event.clone(),
                         });
